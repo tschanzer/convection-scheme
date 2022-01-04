@@ -8,7 +8,12 @@ from metpy.units import units, concatenate
 import metpy.calc as mpcalc
 import metpy.constants as const
 
-from dparcel.thermo import lcl_romps, moist_lapse, saturation_specific_humidity
+from pint.errors import OffsetUnitCalculusError
+
+from dparcel.thermo import (lcl_romps, moist_lapse, wetbulb,
+                            equivalent_potential_temperature,
+                            saturation_specific_humidity)
+
 
 class ThermalGenerator:
     """
@@ -101,6 +106,176 @@ class ThermalGenerator:
         self.q_disp = q_disp
         self.l_disp = l_disp
         self.b_disp = b_disp
+
+    def updraft(
+            self, i_init, t_perturb, q_perturb, l_initial, w_initial,
+            entrainment_rate, dnu_db, drag, l_crit):
+        """
+        Calculate the properties associated with an ascending thermal.
+
+        Args:
+            i_init: Index of the initiation level.
+            t_perturb: Initial temperature perturbation. The initial
+                temperature is the environmental value plus t_perturb.
+            q_perturb: Initial specific humidity perturbation. The
+                inital specific humidity is the environmental value
+                plus q_perturb.
+            l_initial: Initial liquid water content (mass of liquid
+                per unit total mass).
+            w_initial: Initial velocity (must be non-negative).
+            entrainment_rate: Entrainment rate (should have dimensions
+                of 1/length).
+            dnu_db: The proportionality constant defining the detrainent
+                rate nu. When the buoyancy b is negative, nu is zero,
+                and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
+                should be time^2/length^2.
+            drag: Drag coefficient for determining parcel velocity.
+                Should have dimensions of 1/length.
+            l_crit: The critical liquid water content above which
+                precipitation forms.
+
+        Returns:
+            Bunch object with the folliwing fields defined --
+                - **temperature** -- Array containing the parcel's
+                  temperature at each level.
+                - **specific_humidity** -- Array containing the parcel's
+                  specific humidity at each level.
+                - **liquid_content** -- Array containing the parcel's
+                  liquid content at each level.
+                - **precipitation** -- Array containing the mass of
+                  liquid water precipitated out at each level, as a
+                  fraction of the parcel mass at the same level.
+                - **buoyancy** -- Array containing the parcel's buoyancy
+                  at each level.
+                - **velocity** -- Array containing the parcel's
+                  vertical velocity at each level.
+                - **m_detrained** -- Array containing the mass
+                  detrained at each level, as a fraction of the original
+                  mass.
+        """
+        try:
+            t_initial = self.temperature[i_init] + t_perturb
+        except OffsetUnitCalculusError as e:
+            raise ValueError(
+                f'The units of t_perturb ({t_perturb.units}) are not'
+                'suitable for addition to the environmental temperature.'
+                'Try kelvin or delta_degC instead.') from e
+        temperature, specific_humidity, liquid_content, buoyancy = (
+            self._heterogeneous_properties(
+                i_init, t_initial, self.specific_humidity[i_init] + q_perturb,
+                l_initial, entrainment_rate, kind='up')
+        )
+
+        # set precipitation to zero in the levels below the initial
+        # level rather than np.nan
+        precipitation = np.maximum(liquid_content - l_crit, 0)
+        precipitation = np.where(np.isnan(precipitation), 0, precipitation)
+
+        velocity = self._velocity_profile(
+            i_init, w_initial, buoyancy, drag, kind='up')
+        m_detrained = self._detrained_mass(
+            velocity, buoyancy, dnu_db, kind='up')
+
+        result = UpdraftResult()
+        result.temperature = temperature
+        result.specific_humidity = specific_humidity
+        result.liquid_content = liquid_content
+        result.precipitation = precipitation
+        result.buoyancy = buoyancy
+        result.velocity = velocity
+        result.m_detrained = m_detrained
+        return result
+
+    def downdraft(
+            self, i_init, delta_Q, w_initial, entrainment_rate, dnu_db, drag):
+        """
+        Calculate the properties associated with a descending thermal.
+
+        The descent is assumed to be triggered by the evaporation of
+        precipitation into an environmental parcel.
+
+        Args:
+            i_init: Index of the initiation level.
+            delta_Q: Total mass of liquid water initially evaporated
+                into the environmental parcel at i_init.
+            w_initial: Initial velocity (must be non-negative).
+            entrainment_rate: Entrainment rate (should have dimensions
+                of 1/length).
+            dnu_db: The proportionality constant defining the detrainent
+                rate nu. When the buoyancy b is negative, nu is zero,
+                and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
+                should be time^2/length^2.
+            drag: Drag coefficient for determining parcel velocity.
+                Should have dimensions of 1/length.
+            l_crit: The critical liquid water content above which
+                precipitation forms.
+
+        Returns:
+            Bunch object with the folliwing fields defined --
+                - **temperature** -- Array containing the parcel's
+                  temperature at each level.
+                - **specific_humidity** -- Array containing the parcel's
+                  specific humidity at each level.
+                - **liquid_content** -- Array containing the parcel's
+                  liquid content at each level.
+                  liquid water precipitated out at each level, as a
+                  fraction of the parcel mass at the same level.
+                - **buoyancy** -- Array containing the parcel's buoyancy
+                  at each level.
+                - **velocity** -- Array containing the parcel's
+                  vertical velocity at each level.
+                - **m_detrained** -- Array containing the mass
+                  detrained at each level, as a fraction of the original
+                  mass.
+        """
+        # to find the initial temperature after evaporation,first assume
+        # that the parcel becomes saturated and therefore attains the
+        # environmental wet bulb temperature
+        theta_e_initial = equivalent_potential_temperature(
+            self.pressure[i_init], self.temperature[i_init],
+            self.specific_humidity[i_init])
+        t_initial = wetbulb(self.pressure[i_init], theta_e_initial)
+        # the resulting specific humidity is the saturation value
+        q_initial = saturation_specific_humidity(
+            self.pressure[i_init], t_initial)
+        # by conservation of total water, the environmental specific
+        # humidity plus the amount of liquid evaporated equals
+        # the resulting specific humidity plus liquid content
+        l_initial = self.specific_humidity[i_init] + delta_Q - q_initial
+
+        # if the liquid content resulting from evaporation to the point
+        # of saturation is negative, this indicates that delta_Q is
+        # not large enough to saturate the parcel. We find the actual
+        # resulting temperature using the conservation of equivalent
+        # potential temperature during the evaporation process:
+        # we use Newton's method to seek the temperature such that
+        # the final equivelent potential temperature is unchanged.
+        if l_initial < 0:
+            q_initial = self.specific_humidity[i_init] + delta_Q
+            l_initial = 0*units.dimensionless
+            for _ in range(5):
+                value, slope = equivalent_potential_temperature(
+                    self.pressure[i_init], t_initial, q_initial)
+                t_initial -= (value - theta_e_initial)/slope
+
+        temperature, specific_humidity, liquid_content, buoyancy = (
+            self._heterogeneous_properties(
+                i_init, t_initial, q_initial,
+                l_initial, entrainment_rate, kind='down')
+        )
+        velocity = self._velocity_profile(
+            i_init, w_initial, buoyancy, drag, kind='down')
+        m_detrained = self._detrained_mass(
+            velocity, buoyancy, dnu_db, kind='down')
+
+        result = DowndraftResult()
+        result.temperature = temperature
+        result.specific_humidity = specific_humidity
+        result.liquid_content = liquid_content
+        result.buoyancy = buoyancy
+        result.velocity = velocity
+        result.m_detrained = m_detrained
+        return result
 
     def _transition_point(self, p_initial, t_initial, q_initial, l_initial):
         """
@@ -196,14 +371,16 @@ class ThermalGenerator:
 
         Returns:
             Arrays of parcel temperatures, specific humidities and
-            liquid ratios at the levels of interest.
+            liquid ratios at the levels of interest. Any levels below
+            (above) the initial level for updrafts (downdrafts) will
+            be np.nan.
         """
         p_switch, t_switch = self._transition_point(
             p_initial, t_initial, q_initial, l_initial)
 
-        t_final = np.zeros(self.pressure.size)*units.kelvin
-        q_final = np.zeros(self.pressure.size)*units.dimensionless
-        l_final = np.zeros(self.pressure.size)*units.dimensionless
+        t_final = np.full(self.pressure.size, np.nan)*units.kelvin
+        q_final = np.full(self.pressure.size, np.nan)*units.dimensionless
+        l_final = np.full(self.pressure.size, np.nan)*units.dimensionless
 
         # descent is moist adiabatic above the transition point and
         # dry adiabatic below the transition point. exclude any levels
@@ -260,7 +437,8 @@ class ThermalGenerator:
             Arrays of length pressure.size containing the average
             temperature, specific humidity, liquid content and buoyancy
             of the parcel, weighted by the mass mixing fraction of the
-            components.
+            components. Any levels below (above) the initial level for
+            updrafts (downdrafts) will be np.nan.
 
         References:
             SHERWOOD, SC, HERNANDEZ-DECKERS, D, COLIN, M & ROBINSON, F 2013,
@@ -420,8 +598,8 @@ class ThermalGenerator:
             buoyancy: Buoyancy of the thermal at each level.
             dnu_db: The proportionality constant defining the detrainent
                 rate nu. When the buoyancy b is negative, nu is zero,
-                and when b > 0, nu = b*dnu_db. The units of dnu_db should be
-                s^2/m^2.
+                and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
+                should be time^2/length^2.
             kind: 'up' for updrafts, 'down' for downdrafts.
 
         Returns:
@@ -464,5 +642,31 @@ class ThermalGenerator:
         thickness[-1] = self.height[-2] - self.height[-1]  # surface layer
         # change in fractional mass is approx. m * nu * delta z
         m_deposited = m_remaining*nu*thickness
-        return np.where(np.isnan(m_deposited), 0*units.dimensionless,
-                        m_deposited)
+        return np.where(np.isnan(m_deposited), 0, m_deposited)
+
+
+class UpdraftResult:
+    """Container for updraft calculation results."""
+
+    def __init__(self):
+        """Creates an instance of UpdraftResult."""
+        self.temperature = None
+        self.specific_humidity = None
+        self.liquid_content = None
+        self.precipitation = None
+        self.buoyancy = None
+        self.velocity = None
+        self.m_detrained = None
+
+
+class DowndraftResult:
+    """Container for downdraft calculation results."""
+
+    def __init__(self):
+        """Creates an instance of DowndraftResult."""
+        self.temperature = None
+        self.specific_humidity = None
+        self.liquid_content = None
+        self.buoyancy = None
+        self.velocity = None
+        self.m_detrained = None
