@@ -20,6 +20,8 @@ class ThermalGenerator:
     Collects functions for updrafts and downdrafts in a given sounding.
 
     Methods:
+        updraft: Calculate the properties of an ascending thermal.
+        downdraft: Calculate the properties of a descending thermal.
 
     Attributes:
         pressure: Array of pressure levels in the sounding.
@@ -207,8 +209,6 @@ class ThermalGenerator:
                 should be time^2/length^2.
             drag: Drag coefficient for determining parcel velocity.
                 Should have dimensions of 1/length.
-            l_crit: The critical liquid water content above which
-                precipitation forms.
 
         Returns:
             Bunch object with the folliwing fields defined --
