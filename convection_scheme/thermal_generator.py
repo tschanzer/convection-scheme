@@ -176,7 +176,7 @@ class ThermalGenerator:
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='up')
         m_detrained = self._detrained_mass(
-            velocity, buoyancy, dnu_db, kind='up')
+            velocity, buoyancy, dnu_db, entrainment_rate, kind='up')
 
         result = UpdraftResult()
         result.temperature = temperature
@@ -185,7 +185,7 @@ class ThermalGenerator:
         result.precipitation = precipitation
         result.buoyancy = buoyancy
         result.velocity = velocity
-        result.m_detrained = m_detrained
+        result.m_detrained = m_detrained.to(units.dimensionless)
         return result
 
     def downdraft(
@@ -266,7 +266,7 @@ class ThermalGenerator:
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='down')
         m_detrained = self._detrained_mass(
-            velocity, buoyancy, dnu_db, kind='down')
+            velocity, buoyancy, dnu_db, entrainment_rate, kind='down')
 
         result = DowndraftResult()
         result.temperature = temperature
@@ -274,7 +274,7 @@ class ThermalGenerator:
         result.liquid_content = liquid_content
         result.buoyancy = buoyancy
         result.velocity = velocity
-        result.m_detrained = m_detrained
+        result.m_detrained = m_detrained.to(units.dimensionless)
         return result
 
     def _transition_point(self, p_initial, t_initial, q_initial, l_initial):
@@ -588,9 +588,12 @@ class ThermalGenerator:
             velocity[j] = dir_*np.sqrt(v_squared) if v_squared >= 0 else np.nan
         return velocity
 
-    def _detrained_mass(self, velocity, buoyancy, dnu_db, *, kind):
+    def _detrained_mass(
+            self, velocity, buoyancy, dnu_db, entrainment_rate, *, kind):
         """
         Calculate the fractional mass detrained from a thermal at each level.
+
+        Accounts for bulk detrainment and two-way mixing.
 
         Args:
             velocity: Vertical velocity of the thermal at each level,
@@ -600,6 +603,8 @@ class ThermalGenerator:
                 rate nu. When the buoyancy b is negative, nu is zero,
                 and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
                 should be time^2/length^2.
+            entrainment_rate: Entrainment rate (should have dimensions
+                of 1/length).
             kind: 'up' for updrafts, 'down' for downdrafts.
 
         Returns:
@@ -641,7 +646,7 @@ class ThermalGenerator:
         thickness[0] = self.height[0] - self.height[1]  # topmost layer
         thickness[-1] = self.height[-2] - self.height[-1]  # surface layer
         # change in fractional mass is approx. m * nu * delta z
-        m_deposited = m_remaining*nu*thickness
+        m_deposited = m_remaining*(entrainment_rate + nu)*thickness
         return np.where(np.isnan(m_deposited), 0, m_deposited)
 
 
