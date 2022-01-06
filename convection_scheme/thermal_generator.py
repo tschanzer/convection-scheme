@@ -255,7 +255,7 @@ class ThermalGenerator:
             l_initial = 0*units.dimensionless
             for _ in range(5):
                 value, slope = equivalent_potential_temperature(
-                    self.pressure[i_init], t_initial, q_initial)
+                    self.pressure[i_init], t_initial, q_initial, prime=True)
                 t_initial -= (value - theta_e_initial)/slope
 
         temperature, specific_humidity, liquid_content, buoyancy = (
