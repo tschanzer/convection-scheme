@@ -584,8 +584,13 @@ class ThermalGenerator:
                 + 2*np.exp(-dir_*2*drag*self.height[j])*integral
             )
 
-            # v^2 < 0 indicates the thermal cannot reach that level
-            velocity[j] = dir_*np.sqrt(v_squared) if v_squared >= 0 else np.nan
+            if v_squared >= 0:
+                velocity[j] = dir_*np.sqrt(v_squared)
+            else:
+                # v^2 < 0 indicates the thermal cannot reach that level or
+                # any of the levels beyond: stop the calculation at this point
+                velocity[j::-dir_] = np.nan
+                break
         return velocity
 
     def _detrained_mass(
