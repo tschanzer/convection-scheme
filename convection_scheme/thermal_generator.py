@@ -154,6 +154,12 @@ class ThermalGenerator:
                 - **m_detrained** -- Array containing the mass
                   detrained at each level, as a fraction of the original
                   mass.
+                - **t_detrained** -- Array containing the temperature of
+                  detrained air at each level.
+                - **q_detrained** -- Array containing the specific
+                  humidity of detrained air at each level.
+                - **l_detrained** -- Array containing the liquid
+                  content of detrained air at each level.
         """
         try:
             t_initial = self.temperature[i_init] + t_perturb
@@ -178,6 +184,16 @@ class ThermalGenerator:
         m_detrained = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='up')
 
+        t_detrained = np.full(self.pressure.size, np.nan)*units.kelvin
+        q_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
+        l_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
+        for i in np.argwhere(~np.isnan(velocity)):
+            # the components of the detrained air mix and
+            # come into phase equilibrium
+            t_detrained[i], q_detrained[i], l_detrained[i] = equilibrate(
+                self.pressure[i], temperature[i],
+                specific_humidity[i], liquid_content[i])
+
         result = UpdraftResult()
         result.temperature = temperature
         result.specific_humidity = specific_humidity
@@ -186,6 +202,9 @@ class ThermalGenerator:
         result.buoyancy = buoyancy
         result.velocity = velocity
         result.m_detrained = m_detrained.to(units.dimensionless)
+        result.t_detrained = t_detrained
+        result.q_detrained = q_detrained
+        result.l_detrained = l_detrained
         return result
 
     def downdraft(
@@ -227,6 +246,12 @@ class ThermalGenerator:
                 - **m_detrained** -- Array containing the mass
                   detrained at each level, as a fraction of the original
                   mass.
+                - **t_detrained** -- Array containing the temperature of
+                  detrained air at each level.
+                - **q_detrained** -- Array containing the specific
+                  humidity of detrained air at each level.
+                - **l_detrained** -- Array containing the liquid
+                  content of detrained air at each level.
         """
         # find the temperature of the environmental parcel after
         # evaporation of an amount delta_Q of liquid water
@@ -244,6 +269,16 @@ class ThermalGenerator:
         m_detrained = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='down')
 
+        t_detrained = np.full(self.pressure.size, np.nan)*units.kelvin
+        q_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
+        l_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
+        for i in np.argwhere(~np.isnan(velocity)):
+            # the components of the detrained air mix and
+            # come into phase equilibrium
+            t_detrained[i], q_detrained[i], l_detrained[i] = equilibrate(
+                self.pressure[i], temperature[i],
+                specific_humidity[i], liquid_content[i])
+
         result = DowndraftResult()
         result.temperature = temperature
         result.specific_humidity = specific_humidity
@@ -251,6 +286,9 @@ class ThermalGenerator:
         result.buoyancy = buoyancy
         result.velocity = velocity
         result.m_detrained = m_detrained.to(units.dimensionless)
+        result.t_detrained = t_detrained
+        result.q_detrained = q_detrained
+        result.l_detrained = l_detrained
         return result
 
     def _transition_point(self, p_initial, t_initial, q_initial, l_initial):
@@ -643,6 +681,9 @@ class UpdraftResult:
         self.buoyancy = None
         self.velocity = None
         self.m_detrained = None
+        self.t_detrained = None
+        self.q_detrained = None
+        self.l_detrained = None
 
 
 class DowndraftResult:
@@ -656,6 +697,9 @@ class DowndraftResult:
         self.buoyancy = None
         self.velocity = None
         self.m_detrained = None
+        self.t_detrained = None
+        self.q_detrained = None
+        self.l_detrained = None
 
 
 def equilibrate(pressure, t_initial, q_initial, l_initial):
