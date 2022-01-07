@@ -228,35 +228,11 @@ class ThermalGenerator:
                   detrained at each level, as a fraction of the original
                   mass.
         """
-        # to find the initial temperature after evaporation,first assume
-        # that the parcel becomes saturated and therefore attains the
-        # environmental wet bulb temperature
-        theta_e_initial = equivalent_potential_temperature(
+        # find the temperature of the environmental parcel after
+        # evaporation of an amount delta_Q of liquid water
+        t_initial, q_initial, l_initial = equilibrate(
             self.pressure[i_init], self.temperature[i_init],
-            self.specific_humidity[i_init])
-        t_initial = wetbulb(self.pressure[i_init], theta_e_initial)
-        # the resulting specific humidity is the saturation value
-        q_initial = saturation_specific_humidity(
-            self.pressure[i_init], t_initial)
-        # by conservation of total water, the environmental specific
-        # humidity plus the amount of liquid evaporated equals
-        # the resulting specific humidity plus liquid content
-        l_initial = self.specific_humidity[i_init] + delta_Q - q_initial
-
-        # if the liquid content resulting from evaporation to the point
-        # of saturation is negative, this indicates that delta_Q is
-        # not large enough to saturate the parcel. We find the actual
-        # resulting temperature using the conservation of equivalent
-        # potential temperature during the evaporation process:
-        # we use Newton's method to seek the temperature such that
-        # the final equivelent potential temperature is unchanged.
-        if l_initial < 0:
-            q_initial = self.specific_humidity[i_init] + delta_Q
-            l_initial = 0*units.dimensionless
-            for _ in range(5):
-                value, slope = equivalent_potential_temperature(
-                    self.pressure[i_init], t_initial, q_initial, prime=True)
-                t_initial -= (value - theta_e_initial)/slope
+            self.specific_humidity[i_init], delta_Q)
 
         temperature, specific_humidity, liquid_content, buoyancy = (
             self._heterogeneous_properties(
@@ -680,3 +656,53 @@ class DowndraftResult:
         self.buoyancy = None
         self.velocity = None
         self.m_detrained = None
+
+
+def equilibrate(pressure, t_initial, q_initial, l_initial):
+    """
+    Find parcel properties after phase equilibration.
+
+    Args:
+        pressure: Pressure during the change (constant).
+        t_initial: Initial temperature of the parcel.
+        q_initial: Initial specific humidity of the parcel.
+        l_initial: Initial ratio of liquid mass to parcel mass.
+
+    Returns:
+        A tuple containing the final parcel temperature, specific
+            humidity and liquid ratio.
+    """
+    q_sat_initial = saturation_specific_humidity(pressure, t_initial)
+    if ((q_initial <= q_sat_initial and l_initial <= 0)
+            or q_initial == q_sat_initial):
+        # parcel is already in equilibrium
+        return t_initial, q_initial, np.maximum(l_initial, 0)
+
+    # to find the initial temperature after evaporation,first assume
+    # that the parcel becomes saturated and therefore attains the
+    # environmental wet bulb temperature
+    theta_e = equivalent_potential_temperature(pressure, t_initial, q_initial)
+    t_final = wetbulb(pressure, theta_e)
+    q_final = saturation_specific_humidity(pressure, t_final)
+    l_final = q_initial + l_initial - q_final
+
+    # check if the assumption was realistic
+    if l_final < 0:
+        # if the liquid content resulting from evaporation to the point
+        # of saturation is negative, this indicates that l_initial is
+        # not large enough to saturate the parcel. We find the actual
+        # resulting temperature using the conservation of equivalent
+        # potential temperature during the evaporation process:
+        # we use Newton's method to seek the temperature such that
+        # the final equivelent potential temperature is unchanged.
+        # As an initial guess, assume the temperature change is -L*dq/c_p
+        t_final = t_initial - (const.water_heat_vaporization
+                               * l_initial/const.dry_air_spec_heat_press)
+        q_final = q_initial + l_initial
+        l_final = 0*units.dimensionless
+        for _ in range(3):
+            value, slope = equivalent_potential_temperature(
+                pressure, t_final, q_final, prime=True)
+            t_final -= (value - theta_e)/slope
+
+    return t_final, q_final, l_final
