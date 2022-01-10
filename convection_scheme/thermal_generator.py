@@ -174,10 +174,19 @@ class ThermalGenerator:
                 l_initial, entrainment_rate, kind='up')
         )
 
-        # set precipitation to zero in the levels below the initial
-        # level rather than np.nan
-        precipitation = np.maximum(liquid_content - l_crit, 0)
-        precipitation = np.where(np.isnan(precipitation), 0, precipitation)
+        # liquid content cannot exceed the critical value
+        liquid_content = np.minimum(liquid_content, l_crit)
+        liquid_excess = np.maximum(liquid_content - l_crit, 0)
+        liquid_excess = np.where(np.isnan(liquid_excess), 0, liquid_excess)
+        # currently liquid_excess[i] is the cumulative amount
+        # precipitated out at or below level i. the true amount
+        # precipitated out at level i is the increase in the
+        # cumulative amount from level i+1 to level i:
+        precipitation = np.pad(liquid_excess[:-1] - liquid_excess[1:], (0, 1))
+
+        # correct for the previous overestimation of liquid content
+        # when calculating buoyancy
+        buoyancy += liquid_excess*const.g
 
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='up')
