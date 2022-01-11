@@ -154,6 +154,9 @@ class ThermalGenerator:
                 - **m_detrained** -- Array containing the mass
                   detrained at each level, as a fraction of the original
                   mass.
+                - **m_remaining** -- Array containing the mass
+                  remaining at each level, as a fraction of the original
+                  mass.
                 - **t_detrained** -- Array containing the temperature of
                   detrained air at each level.
                 - **q_detrained** -- Array containing the specific
@@ -177,7 +180,7 @@ class ThermalGenerator:
 
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='up')
-        m_detrained = self._detrained_mass(
+        m_detrained, m_remaining = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='up')
 
         t_detrained = np.full(self.pressure.size, np.nan)*units.kelvin
@@ -198,6 +201,7 @@ class ThermalGenerator:
         result.buoyancy = buoyancy
         result.velocity = velocity
         result.m_detrained = m_detrained.to(units.dimensionless)
+        result.m_remaining = m_remaining.to(units.dimensionless)
         result.t_detrained = t_detrained
         result.q_detrained = q_detrained
         result.l_detrained = l_detrained
@@ -242,6 +246,9 @@ class ThermalGenerator:
                 - **m_detrained** -- Array containing the mass
                   detrained at each level, as a fraction of the original
                   mass.
+                - **m_remaining** -- Array containing the mass
+                  remaining at each level, as a fraction of the original
+                  mass.
                 - **t_detrained** -- Array containing the temperature of
                   detrained air at each level.
                 - **q_detrained** -- Array containing the specific
@@ -261,7 +268,7 @@ class ThermalGenerator:
         )
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='down')
-        m_detrained = self._detrained_mass(
+        m_detrained, m_remaining = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='down')
 
         t_detrained = np.full(self.pressure.size, np.nan)*units.kelvin
@@ -281,6 +288,7 @@ class ThermalGenerator:
         result.buoyancy = buoyancy
         result.velocity = velocity
         result.m_detrained = m_detrained.to(units.dimensionless)
+        result.m_remaining = m_remaining.to(units.dimensionless)
         result.t_detrained = t_detrained
         result.q_detrained = q_detrained
         result.l_detrained = l_detrained
@@ -747,8 +755,8 @@ class ThermalGenerator:
             kind: 'up' for updrafts, 'down' for downdrafts.
 
         Returns:
-            An array of mass detrained at each level, as a fraction of the
-            original mass.
+            Arrays of mass detrained and mass remaining at each level, as
+            fractions of the original mass.
         """
         # velocity is nan for the levels the thermal does not reach:
         # use this to identify starting and ending levels
@@ -766,7 +774,7 @@ class ThermalGenerator:
             i_end = np.max(reached_levels)
             dir_ = -1
 
-        m_remaining = np.zeros(self.height.size)*units.dimensionless
+        m_remaining = np.full(self.height.size, np.nan)*units.dimensionless
         m_remaining[i_init] = 1*units.dimensionless  # start with 100% mass
         for j in range(i_init - dir_, i_end - dir_, -dir_):
             if j - dir_ == -1:
@@ -786,7 +794,7 @@ class ThermalGenerator:
         thickness[-1] = self.height[-2] - self.height[-1]  # surface layer
         # change in fractional mass is approx. m * nu * delta z
         m_deposited = m_remaining*(entrainment_rate + nu)*thickness
-        return np.where(np.isnan(m_deposited), 0, m_deposited)
+        return np.where(np.isnan(m_deposited), 0, m_deposited), m_remaining
 
 
 class UpdraftResult:
@@ -801,6 +809,7 @@ class UpdraftResult:
         self.buoyancy = None
         self.velocity = None
         self.m_detrained = None
+        self.m_remaining = None
         self.t_detrained = None
         self.q_detrained = None
         self.l_detrained = None
@@ -817,6 +826,7 @@ class DowndraftResult:
         self.buoyancy = None
         self.velocity = None
         self.m_detrained = None
+        self.m_remaining = None
         self.t_detrained = None
         self.q_detrained = None
         self.l_detrained = None
