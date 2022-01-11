@@ -97,7 +97,7 @@ class ThermalGenerator:
         # note that the parcel arrays are 2D while the environment array
         # is 1D: the calculation is performed row-by-row on the 2D arrays,
         # not column-by-column
-        b_disp = ((1 - l_disp)*tv_disp - tv_env)/tv_env*const.g
+        b_disp = (tv_disp - tv_env)/tv_env*const.g
 
         self.pressure = pressure
         self.height = height
@@ -168,25 +168,12 @@ class ThermalGenerator:
                 f'The units of t_perturb ({t_perturb.units}) are not'
                 'suitable for addition to the environmental temperature.'
                 'Try kelvin or delta_degC instead.') from e
-        temperature, specific_humidity, liquid_content, buoyancy = (
-            self._heterogeneous_properties(
+        (temperature, specific_humidity, liquid_content,
+         buoyancy, precipitation) = (
+            self._updraft_properties(
                 i_init, t_initial, self.specific_humidity[i_init] + q_perturb,
-                l_initial, entrainment_rate, kind='up')
+                l_initial, entrainment_rate, l_crit)
         )
-
-        # liquid content cannot exceed the critical value
-        liquid_content = np.minimum(liquid_content, l_crit)
-        liquid_excess = np.maximum(liquid_content - l_crit, 0)
-        liquid_excess = np.where(np.isnan(liquid_excess), 0, liquid_excess)
-        # currently liquid_excess[i] is the cumulative amount
-        # precipitated out at or below level i. the true amount
-        # precipitated out at level i is the increase in the
-        # cumulative amount from level i+1 to level i:
-        precipitation = np.pad(liquid_excess[:-1] - liquid_excess[1:], (0, 1))
-
-        # correct for the previous overestimation of liquid content
-        # when calculating buoyancy
-        buoyancy += liquid_excess*const.g
 
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='up')
@@ -269,9 +256,8 @@ class ThermalGenerator:
             self.specific_humidity[i_init], delta_Q)
 
         temperature, specific_humidity, liquid_content, buoyancy = (
-            self._heterogeneous_properties(
-                i_init, t_initial, q_initial,
-                l_initial, entrainment_rate, kind='down')
+            self._downdraft_properties(
+                i_init, t_initial, q_initial, l_initial, entrainment_rate)
         )
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='down')
@@ -440,11 +426,11 @@ class ThermalGenerator:
 
         return t_final, q_final, l_final
 
-    def _heterogeneous_properties(
+    def _updraft_properties(
             self, i_init, t_initial, q_initial, l_initial,
-            entrainment_rate, *, kind):
+            entrainment_rate, l_crit):
         """
-        Find the properties of a heterogeneous parcel.
+        Find the properties of a heterogeneous updraft parcel.
 
         The method follows Section 4 of Sherwood et al. (2013).
 
@@ -454,14 +440,15 @@ class ThermalGenerator:
             q_initial: Initial specific humidity of the parcel.
             l_initial: Initial liquid water ratio of the parcel.
             entrainment_rate: Entrainment rate.
-            kind: 'up' for updrafts, 'down' for downdrafts.
+            l_crit: The critical liquid water content above which
+                precipitation forms.
 
         Returns:
             Arrays of length pressure.size containing the average
             temperature, specific humidity, liquid content and buoyancy
-            of the parcel, weighted by the mass mixing fraction of the
-            components. Any levels below (above) the initial level for
-            updrafts (downdrafts) will be np.nan.
+            of the parcel, and the amount of liquid precipitated out,
+            weighted by the mass mixing fraction of the components.
+            Any levels below the initial level will be np.nan.
 
         References:
             SHERWOOD, SC, HERNANDEZ-DECKERS, D, COLIN, M & ROBINSON, F 2013,
@@ -471,10 +458,144 @@ class ThermalGenerator:
         # find the properties of the non-entraining initial 'core' component
         # of the parcel
         t_core, q_core, l_core = self._nonentraining_properties(
-            self.pressure[i_init], t_initial, q_initial, l_initial, kind=kind)
+            self.pressure[i_init], t_initial, q_initial, l_initial, kind='up')
         r_core = mpcalc.mixing_ratio_from_specific_humidity(q_core)
         tv_core = mpcalc.virtual_temperature(t_core, r_core)
-        b_core = ((1 - l_core)*tv_core - self.t_virtual)/self.t_virtual*const.g
+        b_core = (tv_core - self.t_virtual)/self.t_virtual*const.g
+
+        # liquid content cannot exceed the critical value
+        l_core_excess = np.maximum(l_core - l_crit, 0)
+        l_disp_excess = np.maximum(self.l_disp - l_crit, 0)
+        l_core_excess = np.where(np.isnan(l_core_excess), 0, l_core_excess)
+        l_core -= l_core_excess
+        l_disp = self.l_disp - l_disp_excess
+        # currently l_core_excess[i] is the cumulative amount
+        # precipitated out at or below level i. the true amount
+        # precipitated out at level i is the increase in the
+        # cumulative amount from level i+1 to level i:
+        precip_core = np.pad(l_core_excess[:-1] - l_core_excess[1:], (0, 1))
+        # similarly l_disp_excess[i,j] is the cumulative amount
+        # precipitated out at or below level j by the parcel starting
+        # at level i:
+        precip_disp = l_disp_excess[:,:-1] - l_disp_excess[:,1:]
+        precip_disp = np.pad(precip_disp, ((0, 0), (0, 1)))
+
+        # following Eq. (8), (9) of Sherwood et al. (2013):
+        # mixing_fraction[i,j] is the proportion of air originally in the
+        # parcel at height[i] that remains in the parcel after
+        # ascent/descent to height[j], i.e.,
+        # mixing_fraction[i,j] = exp(-eps|height[i] - height[j]|).
+        mixing_fraction = np.exp(-entrainment_rate*np.abs(
+            np.atleast_2d(self.height) - np.atleast_2d(self.height).T
+        ))
+
+        # initialise unused array entries as nan
+        t_mix = np.full(self.pressure.size, np.nan)*units.kelvin
+        q_mix = np.full(self.pressure.size, np.nan)*units.dimensionless
+        l_mix = np.full(self.pressure.size, np.nan)*units.dimensionless
+        b_mix = np.full(self.pressure.size, np.nan)*units.meter/units.second**2
+        precip_mix = np.zeros(self.pressure.size)*units.dimensionless
+        # values at the initial height are the initial values, no entrainment
+        t_mix[i_init] = t_core[i_init]
+        q_mix[i_init] = q_core[i_init]
+        l_mix[i_init] = l_core[i_init]
+        b_mix[i_init] = b_core[i_init]
+        precip_mix[i_init] = precip_core[i_init]
+
+        # i_init - dir_ is the index of the first level the parcel
+        # encounters after the initial level, and end is one index past
+        # the last vertical level in the direction of travel (since range
+        # and slice do not include the last value)
+        for j in range(i_init-1, -1, -1):  # j is destination level
+            if j == 0:
+                i_range = slice(i_init, None, -1)
+            else:
+                i_range = slice(i_init, j-1, -1)
+            z_interval = self.height[i_range].m_as(units.meter)
+
+            # following Eq. (10) of Sherwood et al. (2013):
+            # integrate the contributions of environmental parcels that
+            # are entrained in between the initial and final levels using
+            # Simpson's rule
+            t_integrand = (
+                self.t_disp[i_range,j].T*entrainment_rate
+                * mixing_fraction[i_range,j].T
+            ).m_as(units.kelvin/units.meter)
+            # add a negative sign to the integral if z_interval is
+            # decreasing (i.e., for a downdraft parcel) so that we are
+            # always integrating upwards
+            t_integral = simpson(t_integrand, z_interval)*units.kelvin
+            t_mix[j] = t_core[j]*mixing_fraction[i_init,j] + t_integral
+
+            # same procedure as above for the other variables
+            q_integrand = (
+                self.q_disp[i_range,j].T*entrainment_rate
+                * mixing_fraction[i_range,j].T
+            ).m_as(1/units.meter)
+            q_integral = simpson(q_integrand, z_interval)
+            q_integral *= units.dimensionless
+            q_mix[j] = q_core[j]*mixing_fraction[i_init,j] + q_integral
+
+            l_integrand = (
+                l_disp[i_range,j].T*entrainment_rate
+                * mixing_fraction[i_range,j].T
+            ).m_as(1/units.meter)
+            l_integral = simpson(l_integrand, z_interval)
+            l_integral *= units.dimensionless
+            l_mix[j] = l_core[j]*mixing_fraction[i_init,j] + l_integral
+
+            b_integrand = (
+                self.b_disp[i_range,j].T*entrainment_rate
+                * mixing_fraction[i_range,j].T
+            ).m_as(1/units.second**2)
+            b_integral = simpson(b_integrand, z_interval)
+            b_integral *= units.meter/units.second**2
+            b_mix[j] = b_core[j]*mixing_fraction[i_init,j] + b_integral
+
+            precip_integrand = (
+                precip_disp[i_range,j].T*entrainment_rate
+                * mixing_fraction[i_range,j].T
+            ).m_as(1/units.meter)
+            precip_integral = simpson(precip_integrand, z_interval)
+            precip_integral *= units.dimensionless
+            precip_mix[j] = (precip_core[j]*mixing_fraction[i_init,j]
+                             + precip_integral)
+
+        return t_mix, q_mix, l_mix, b_mix - l_mix*const.g, precip_mix
+
+    def _downdraft_properties(
+            self, i_init, t_initial, q_initial, l_initial, entrainment_rate):
+        """
+        Find the properties of a heterogeneous downdraft parcel.
+
+        The method follows Section 4 of Sherwood et al. (2013).
+
+        Args:
+            i_init: Index of the starting level for the parcel.
+            t_initial: Initial temperature of the parcel.
+            q_initial: Initial specific humidity of the parcel.
+            l_initial: Initial liquid water ratio of the parcel.
+            entrainment_rate: Entrainment rate.
+
+        Returns:
+            Arrays of length pressure.size containing the average
+            temperature, specific humidity, liquid content and buoyancy
+            of the parcel, weighted by the mass mixing fraction of the
+            components. Any levels above the initial level will be np.nan.
+
+        References:
+            SHERWOOD, SC, HERNANDEZ-DECKERS, D, COLIN, M & ROBINSON, F 2013,
+            ‘Slippery Thermals and the Cumulus Entrainment Paradox’, Journal
+            of the atmospheric sciences, vol. 70, no. 8, pp. 2426–2442.
+        """
+        # find the properties of the non-entraining initial 'core' component
+        # of the parcel
+        t_core, q_core, l_core = self._nonentraining_properties(
+            self.pressure[i_init], t_initial,
+            q_initial, l_initial, kind='down')
+        r_core = mpcalc.mixing_ratio_from_specific_humidity(q_core)
+        tv_core = mpcalc.virtual_temperature(t_core, r_core)
+        b_core = (tv_core - self.t_virtual)/self.t_virtual*const.g
 
         # following Eq. (8), (9) of Sherwood et al. (2013):
         # mixing_fraction[i,j] is the proportion of air originally in the
@@ -496,63 +617,53 @@ class ThermalGenerator:
         l_mix[i_init] = l_core[i_init]
         b_mix[i_init] = b_core[i_init]
 
-        if kind == 'up':
-            dir_ = 1
-            end = -1
-        else:
-            dir_ = -1
-            end = self.pressure.size
         # i_init - dir_ is the index of the first level the parcel
         # encounters after the initial level, and end is one index past
         # the last vertical level in the direction of travel (since range
         # and slice do not include the last value)
-        for j in range(i_init - dir_, end, -dir_):  # j is destination level
-            if j - dir_ == -1:
-                i_range = slice(i_init, None, -dir_)
-            else:
-                i_range = slice(i_init, j - dir_, -dir_)
-            z_interval = self.height[i_range].m_as(units.meter)
+        for j in range(i_init+1, self.pressure.size):  # j is destination level
+            z_interval = self.height[i_init:j+1].m_as(units.meter)
 
             # following Eq. (10) of Sherwood et al. (2013):
             # integrate the contributions of environmental parcels that
             # are entrained in between the initial and final levels using
             # Simpson's rule
             t_integrand = (
-                self.t_disp[i_range,j].T*entrainment_rate
-                * mixing_fraction[i_range,j].T
+                self.t_disp[i_init:j+1,j].T*entrainment_rate
+                * mixing_fraction[i_init:j+1,j].T
             ).m_as(units.kelvin/units.meter)
             # add a negative sign to the integral if z_interval is
             # decreasing (i.e., for a downdraft parcel) so that we are
             # always integrating upwards
-            t_integral = dir_*simpson(t_integrand, z_interval)*units.kelvin
+            t_integral = -simpson(t_integrand, z_interval)*units.kelvin
             t_mix[j] = t_core[j]*mixing_fraction[i_init,j] + t_integral
 
             # same procedure as above for the other variables
             q_integrand = (
-                self.q_disp[i_range,j].T*entrainment_rate
-                * mixing_fraction[i_range,j].T
+                self.q_disp[i_init:j+1,j].T*entrainment_rate
+                * mixing_fraction[i_init:j+1,j].T
             ).m_as(1/units.meter)
-            q_integral = dir_*simpson(q_integrand, z_interval)
+            q_integral = -simpson(q_integrand, z_interval)
             q_integral *= units.dimensionless
             q_mix[j] = q_core[j]*mixing_fraction[i_init,j] + q_integral
 
             l_integrand = (
-                self.l_disp[i_range,j].T*entrainment_rate
-                * mixing_fraction[i_range,j].T
+                self.l_disp[i_init:j+1,j].T*entrainment_rate
+                * mixing_fraction[i_init:j+1,j].T
             ).m_as(1/units.meter)
-            l_integral = dir_*simpson(l_integrand, z_interval)
+            l_integral = -simpson(l_integrand, z_interval)
             l_integral *= units.dimensionless
             l_mix[j] = l_core[j]*mixing_fraction[i_init,j] + l_integral
 
             b_integrand = (
-                self.b_disp[i_range,j].T*entrainment_rate
-                * mixing_fraction[i_range,j].T
+                self.b_disp[i_init:j+1,j].T*entrainment_rate
+                * mixing_fraction[i_init:j+1,j].T
             ).m_as(1/units.second**2)
-            b_integral = dir_*simpson(b_integrand, z_interval)
+            b_integral = -simpson(b_integrand, z_interval)
             b_integral *= units.meter/units.second**2
             b_mix[j] = b_core[j]*mixing_fraction[i_init,j] + b_integral
 
-        return t_mix, q_mix, l_mix, b_mix
+        return t_mix, q_mix, l_mix, b_mix - l_mix*const.g
 
     def _velocity_profile(
             self, i_init, w_initial, buoyancy, drag=0/units.meter, *, kind):
