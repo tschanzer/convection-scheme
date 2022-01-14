@@ -853,8 +853,8 @@ def equilibrate(pressure, t_initial, q_initial, l_initial):
         return t_initial, q_initial, np.maximum(l_initial, 0)
 
     # to find the initial temperature after evaporation,first assume
-    # that the parcel becomes saturated and therefore attains the
-    # environmental wet bulb temperature
+    # that the parcel becomes saturated and therefore attains its
+    # wet bulb temperature
     theta_e = equivalent_potential_temperature(pressure, t_initial, q_initial)
     t_final = wetbulb(pressure, theta_e)
     q_final = saturation_specific_humidity(pressure, t_final)
