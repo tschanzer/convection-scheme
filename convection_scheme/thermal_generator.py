@@ -111,7 +111,7 @@ class ThermalGenerator:
 
     def updraft(
             self, i_init, t_perturb, q_perturb, l_initial, w_initial,
-            entrainment_rate, dnu_db, drag, l_crit):
+            entrainment_rate, dnu_db, drag, l_crit, basic=False):
         """
         Calculate the properties associated with an ascending thermal.
 
@@ -135,6 +135,8 @@ class ThermalGenerator:
                 Should have dimensions of 1/length.
             l_crit: The critical liquid water content above which
                 precipitation forms.
+            basic: Set to True to skip calculation of the detrained
+                air properties.
 
         Returns:
             Bunch object with the folliwing fields defined --
@@ -182,16 +184,20 @@ class ThermalGenerator:
             i_init, w_initial, buoyancy, drag, kind='up')
         m_detrained, m_remaining = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='up')
-
-        t_detrained = np.full(self.pressure.size, np.nan)*units.kelvin
-        q_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
-        l_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
-        for i in np.argwhere(~np.isnan(velocity)):
-            # the components of the detrained air mix and
-            # come into phase equilibrium
-            t_detrained[i], q_detrained[i], l_detrained[i] = equilibrate(
-                self.pressure[i], temperature[i],
-                specific_humidity[i], liquid_content[i])
+        
+        if not basic:
+            t_detrained = np.full(self.pressure.size, np.nan)
+            t_detrained *= units.kelvin
+            q_detrained = np.full(self.pressure.size, np.nan)
+            q_detrained *= units.dimensionless
+            l_detrained = np.full(self.pressure.size, np.nan)
+            l_detrained *= units.dimensionless
+            for i in np.argwhere(~np.isnan(velocity)):
+                # the components of the detrained air mix and
+                # come into phase equilibrium
+                t_detrained[i], q_detrained[i], l_detrained[i] = equilibrate(
+                    self.pressure[i], temperature[i],
+                    specific_humidity[i], liquid_content[i])
 
         result = UpdraftResult()
         result.temperature = temperature
@@ -202,13 +208,15 @@ class ThermalGenerator:
         result.velocity = velocity
         result.m_detrained = m_detrained.to(units.dimensionless)
         result.m_remaining = m_remaining.to(units.dimensionless)
-        result.t_detrained = t_detrained
-        result.q_detrained = q_detrained
-        result.l_detrained = l_detrained
+        if not basic:
+            result.t_detrained = t_detrained
+            result.q_detrained = q_detrained
+            result.l_detrained = l_detrained
         return result
 
     def downdraft(
-            self, i_init, delta_Q, w_initial, entrainment_rate, dnu_db, drag):
+            self, i_init, delta_Q, w_initial,
+            entrainment_rate, dnu_db, drag, basic=False):
         """
         Calculate the properties associated with a descending thermal.
 
@@ -228,6 +236,8 @@ class ThermalGenerator:
                 should be time^2/length^2.
             drag: Drag coefficient for determining parcel velocity.
                 Should have dimensions of 1/length.
+            basic: Set to True to skip calculation of the detrained
+                air properties.
 
         Returns:
             Bunch object with the folliwing fields defined --
@@ -271,15 +281,19 @@ class ThermalGenerator:
         m_detrained, m_remaining = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='down')
 
-        t_detrained = np.full(self.pressure.size, np.nan)*units.kelvin
-        q_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
-        l_detrained = np.full(self.pressure.size, np.nan)*units.dimensionless
-        for i in np.argwhere(~np.isnan(velocity)):
-            # the components of the detrained air mix and
-            # come into phase equilibrium
-            t_detrained[i], q_detrained[i], l_detrained[i] = equilibrate(
-                self.pressure[i], temperature[i],
-                specific_humidity[i], liquid_content[i])
+        if not basic:
+            t_detrained = np.full(self.pressure.size, np.nan)
+            t_detrained *= units.kelvin
+            q_detrained = np.full(self.pressure.size, np.nan)
+            q_detrained *= units.dimensionless
+            l_detrained = np.full(self.pressure.size, np.nan)
+            l_detrained *= units.dimensionless
+            for i in np.argwhere(~np.isnan(velocity)):
+                # the components of the detrained air mix and
+                # come into phase equilibrium
+                t_detrained[i], q_detrained[i], l_detrained[i] = equilibrate(
+                    self.pressure[i], temperature[i],
+                    specific_humidity[i], liquid_content[i])
 
         result = DowndraftResult()
         result.temperature = temperature
@@ -289,9 +303,10 @@ class ThermalGenerator:
         result.velocity = velocity
         result.m_detrained = m_detrained.to(units.dimensionless)
         result.m_remaining = m_remaining.to(units.dimensionless)
-        result.t_detrained = t_detrained
-        result.q_detrained = q_detrained
-        result.l_detrained = l_detrained
+        if not basic:
+            result.t_detrained = t_detrained
+            result.q_detrained = q_detrained
+            result.l_detrained = l_detrained
         return result
 
     def _transition_point(self, p_initial, t_initial, q_initial, l_initial):
