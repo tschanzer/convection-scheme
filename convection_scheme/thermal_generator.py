@@ -182,6 +182,9 @@ class ThermalGenerator:
 
         velocity = self._velocity_profile(
             i_init, w_initial, buoyancy, drag, kind='up')
+        # ensure no precipitation above max height
+        precipitation = np.where(np.isnan(velocity), 0, precipitation)
+
         m_detrained, m_remaining = self._detrained_mass(
             velocity, buoyancy, dnu_db, entrainment_rate, kind='up')
 
@@ -223,7 +226,7 @@ class ThermalGenerator:
         Args:
             i_init: Index of the initiation level.
             t_initial: Initial temperature.
-            q_perturb: Initial specific humidity
+            q_initial: Initial specific humidity
             l_initial: Initial liquid water content (mass of liquid
                 per unit total mass).
             w_initial: Initial velocity (must be non-negative).
