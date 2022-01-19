@@ -12,7 +12,19 @@ PRECIP_LAYER_THICKNESS = 2000*units.meter
 
 
 class Coupler(ThermalGenerator):
-    """Calculates coupled updrafts and downdrafts."""
+    """
+    Calculates coupled updrafts and downdrafts.
+
+    Inherits the methods and attributes of ThermalGenerator, with
+    the following additions.
+
+    Methods:
+        precipitation_driven: Simulate precipitation-driven downdrafts.
+        overshooting: Simulate overshooting downdrafts.
+
+    Attributes:
+        i_min_theta_e: Index of the level of minimum theta-e in the sounding.
+    """
 
     def __init__(self, pressure, height, temperature, specific_humidity):
         """
