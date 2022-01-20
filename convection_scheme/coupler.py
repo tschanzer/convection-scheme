@@ -95,7 +95,7 @@ class Coupler(ThermalGenerator):
             rate, dnu_db, drag, l_crit, basic=basic)
 
         if np.all(updraft.precipitation == 0):
-            return None, None, None
+            return updraft, None, None
 
         total_precip = np.zeros(self.height.size)*units.dimensionless
         i_init_down_min = np.argmin(
