@@ -11,7 +11,7 @@ MAX_PRECIP_DOWNDRAFT_HEIGHT = 4000*units.meter
 PRECIP_LAYER_THICKNESS = 2000*units.meter
 
 
-class Coupler(ThermalGenerator):
+class CoupledThermalGenerator(ThermalGenerator):
     """
     Calculates coupled updrafts and downdrafts.
 
@@ -21,6 +21,9 @@ class Coupler(ThermalGenerator):
     Methods:
         precipitation_driven: Simulate precipitation-driven downdrafts.
         overshooting: Simulate overshooting downdrafts.
+        multi: Simulate precipitation-driven and overshooting downdrafts.
+        ensemble: Simulate an ensemble of coupled updrafts and downdrafts.
+
 
     Attributes:
         i_min_theta_e: Index of the level of minimum theta-e in the sounding.
@@ -45,57 +48,38 @@ class Coupler(ThermalGenerator):
             pressure, temperature, specific_humidity)
         self.i_min_theta_e = np.argmin(theta_e)
 
-    def precipitation_driven(
-            self, i_init_up, t_pert, q_pert, l_initial, w_initial,
-            rate, dnu_db, drag, l_crit, basic=True):
+    def precipitation_driven(self, updraft, rate, dnu_db, drag, basic=True):
         """
-        Simulate an updraft and associated precipitation-driven downdrafts.
+        Simulate precipitation-driven downdrafts.
 
         Args:
-            i_init_up: Index of the updraft initiation level.
-            t_pert: Initial updraft temperature perturbation. The initial
-                temperature is the environmental value plus t_perturb.
-            q_pert: Initial updraft specific humidity perturbation. The
-                inital specific humidity is the environmental value
-                plus q_perturb.
-            l_initial: Initial updraft liquid water content (mass of liquid
-                per unit total mass).
-            w_initial: Initial updraft velocity (must be non-negative).
+            updraft: An instance of UpdraftResult corresponding to
+                the associated updraft.
             rate: Entrainment rate (should have dimensions
-                of 1/length). Assumed to be the same for updraft and
-                downdraft.
+                of 1/length).
             dnu_db: The proportionality constant defining the detrainent
                 rate nu. When the buoyancy b is negative, nu is zero,
                 and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
-                should be time^2/length^2. Assumed to be the same for
-                updraft and downdraft.
+                should be time^2/length^2.
             drag: Drag coefficient for determining parcel velocity.
-                Should have dimensions of 1/length. Assumed to be the
-                same for updraft and downdraft.
-            l_crit: The critical liquid water content above which
-                precipitation forms in the updraft..
+                Should have dimensions of 1/length.
             basic: Set to True to skip calculation of the detrained
-                air properties for both updraft and downdraft.
+                air properties.
 
         Returns:
-            An UpdraftResult object containing the updraft properties,
-            and two DowndraftResult objects: the first for a
+            Two DowndraftResult objects: the first for a
             precipitation-driven downdraft initiating at the level
             of minimum theta-e in the sounding, and the second
             initiating at the level of maximum cumulative available
             precipitation.
 
             If the updraft fails to generate any precipitation,
-            (None, None, None) will be returned. If there is no
+            (None, None) will be returned. If there is no
             precipitation available at the level of minimum theta-e,
             its DowndraftResult will be replaced by None.
         """
-        updraft = self.updraft(
-            i_init_up, t_pert, q_pert, l_initial, w_initial,
-            rate, dnu_db, drag, l_crit, basic=basic)
-
         if np.all(updraft.precipitation == 0):
-            return updraft, None, None
+            return None, None
 
         total_precip = np.zeros(self.height.size)*units.dimensionless
         i_init_down_min = np.argmin(
@@ -120,13 +104,46 @@ class Coupler(ThermalGenerator):
             i_max_precip, total_precip[i_max_precip],
             0*units.meter/units.second, rate, dnu_db, drag, basic=basic)
 
-        return updraft, theta_e_downdraft, max_precip_downdraft
+        return theta_e_downdraft, max_precip_downdraft
 
-    def overshooting(
+    def overshooting(self, updraft, rate, dnu_db, drag, basic=True):
+        """
+        Simulate an overshooting downdraft.
+
+        Args:
+            updraft: An instance of UpdraftResult corresponding to
+                the associated updraft.
+            rate: Entrainment rate (should have dimensions
+                of 1/length).
+            dnu_db: The proportionality constant defining the detrainent
+                rate nu. When the buoyancy b is negative, nu is zero,
+                and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
+                should be time^2/length^2.
+            drag: Drag coefficient for determining parcel velocity.
+                Should have dimensions of 1/length.
+            basic: Set to True to skip calculation of the detrained
+                air properties.
+
+        Returns:
+            A DowndraftResult object containing the overshooting
+            downdraft properties.
+        """
+        i_top = np.min(np.argwhere(~np.isnan(updraft.velocity)))
+        t_init_down, q_init_down, l_init_down = equilibrate(
+            self.pressure[i_top], updraft.temperature[i_top],
+            updraft.specific_humidity[i_top], updraft.liquid_content[i_top])
+
+        downdraft = self.downdraft(
+            i_top, t_init_down, q_init_down, l_init_down,
+            0*units.meter/units.second, rate, dnu_db, drag, basic=basic)
+
+        return downdraft
+
+    def multi(
             self, i_init_up, t_pert, q_pert, l_initial, w_initial,
             rate, dnu_db, drag, l_crit, basic=True):
         """
-        Simulate an updraft and associated overshooting downdraft.
+        Simulate an updraft and three associated coupled downdrafts.
 
         Args:
             i_init_up: Index of the updraft initiation level.
@@ -150,26 +167,82 @@ class Coupler(ThermalGenerator):
                 Should have dimensions of 1/length. Assumed to be the
                 same for updraft and downdraft.
             l_crit: The critical liquid water content above which
-                precipitation forms in the updraft..
+                precipitation forms in the updraft.
             basic: Set to True to skip calculation of the detrained
                 air properties for both updraft and downdraft.
 
         Returns:
             An UpdraftResult object containing the updraft properties
-            and a DowndraftResult object containing the overshooting
-            downdraft properties.
+            and three DowndraftResult objects: the first for a
+            precipitation-driven downdraft initiating at the level
+            of minimum theta-e in the sounding, the second for a
+            precipitation-driven downdraft initiating at the level of
+            maximum cumulative available precipitation, and the third
+            for an overshooting downdraft.
         """
         updraft = self.updraft(
             i_init_up, t_pert, q_pert, l_initial, w_initial,
             rate, dnu_db, drag, l_crit, basic=basic)
+        downdraft1, downdraft2 = self.precipitation_driven(
+            updraft, rate, dnu_db, drag, basic=basic)
+        downdraft3 = self.overshooting(
+            updraft, rate, dnu_db, drag, basic=basic)
 
-        i_top = np.min(np.argwhere(~np.isnan(updraft.velocity)))
-        t_init_down, q_init_down, l_init_down = equilibrate(
-            self.pressure[i_top], updraft.temperature[i_top],
-            updraft.specific_humidity[i_top], updraft.liquid_content[i_top])
+        return updraft, downdraft1, downdraft2, downdraft3
 
-        downdraft = self.downdraft(
-            i_top, t_init_down, q_init_down, l_init_down,
-            0*units.meter/units.second, rate, dnu_db, drag, basic=basic)
+    def ensemble(
+            self, i_init_up, t_pert, q_pert, l_initial, w_initial,
+            rates, dnu_db, drag, l_crit, basic=True):
+        """
+        Simulate an ensemble of coupled updrafts and downdrafts.
 
-        return updraft, downdraft
+        The ensemble has a spectrum of entrainment rates, with identical
+        initial conditions.
+
+        Args:
+            i_init_up: Index of the updraft initiation level.
+            t_pert: Initial updraft temperature perturbation. The initial
+                temperature is the environmental value plus t_perturb.
+            q_pert: Initial updraft specific humidity perturbation. The
+                inital specific humidity is the environmental value
+                plus q_perturb.
+            l_initial: Initial updraft liquid water content (mass of liquid
+                per unit total mass).
+            w_initial: Initial updraft velocity (must be non-negative).
+            rates: Array of entrainment rates (should have dimensions
+                of 1/length). The coupled downdrafts are assumed to
+                have the same entrainment rates as their associated
+                updrafts.
+            dnu_db: The proportionality constant defining the detrainent
+                rate nu. When the buoyancy b is negative, nu is zero,
+                and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
+                should be time^2/length^2. Assumed to be the same for
+                all updrafts and downdrafts.
+            drag: Drag coefficient for determining parcel velocity.
+                Should have dimensions of 1/length. Assumed to be the
+                same for all updrafts and downdrafts.
+            l_crit: The critical liquid water content above which
+                precipitation forms in the updraft. Assumed to be the
+                same for all updrafts.
+            basic: Set to True to skip calculation of the detrained
+                air properties for both updrafts and downdrafts.
+
+        Returns:
+            Four arrays of length rates.size, one containing
+            UpdraftResult instances and three containing DowndraftResult
+            instances. The contents of the arrays correspond to the
+            four outputs of CoupledThermalGenerator.multi.
+        """
+        rates = np.atleast_1d(rates)
+        updrafts = np.empty(rates.size, dtype='object')
+        downdrafts1 = np.empty(rates.size, dtype='object')
+        downdrafts2 = np.empty(rates.size, dtype='object')
+        downdrafts3 = np.empty(rates.size, dtype='object')
+
+        for i in range(rates.size):
+            (updrafts[i], downdrafts1[i],
+             downdrafts2[i], downdrafts3[i]) = self.multi(
+                 i_init_up, t_pert, q_pert, l_initial, w_initial,
+                 rates[i], dnu_db, drag, l_crit, basic=basic)
+
+        return updrafts, downdrafts1, downdrafts2, downdrafts3
