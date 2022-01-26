@@ -10,7 +10,7 @@ import metpy.constants as const
 
 from pint.errors import OffsetUnitCalculusError
 
-from dparcel.thermo import (lcl_romps, moist_lapse, wetbulb,
+from dparcel.thermo import (lcl_romps, moist_lapse_dj, wetbulb,
                             equivalent_potential_temperature,
                             saturation_specific_humidity)
 
@@ -78,9 +78,9 @@ class ThermalGenerator:
                 # temperatures for j < lcl_index[i], i.e., above the LCL,
                 # are the moist pseudoadiabatic values, starting from
                 # the known pressure and temperature at the LCL
-                t_disp[i,:lcl_index[i]] = moist_lapse(
+                t_disp[i,:lcl_index[i]] = moist_lapse_dj(
                     pressure[:lcl_index[i]], t_lcl[i],
-                    reference_pressure=p_lcl[i], method='fast')
+                    reference_pressure=p_lcl[i])
                 # the specific humidity is the saturation value
                 q_disp[i,:lcl_index[i]] = saturation_specific_humidity(
                     pressure[:lcl_index[i]], t_disp[i,:lcl_index[i]])
@@ -400,8 +400,8 @@ class ThermalGenerator:
             p_initial.m_as(units.mbar), self.pressure[-1].m_as(units.mbar), 10
         )*units.mbar
         p_check = concatenate([p_check, self.pressure[-1]])
-        t_moist = moist_lapse(
-            p_check, t_initial, reference_pressure=p_initial, method='fast')
+        t_moist = moist_lapse_dj(
+            p_check, t_initial, reference_pressure=p_initial)
         l_moist = (
             q_initial + l_initial
             - saturation_specific_humidity(p_check, t_moist)
@@ -434,8 +434,8 @@ class ThermalGenerator:
         p_check = np.linspace(
             guess_above.m_as(units.mbar), guess_below.m_as(units.mbar), 100
         )*units.mbar
-        t_moist = moist_lapse(
-            p_check, t_initial, reference_pressure=p_initial, method='fast')
+        t_moist = moist_lapse_dj(
+            p_check, t_initial, reference_pressure=p_initial)
         l_moist = (
             q_initial + l_initial
             - saturation_specific_humidity(p_check, t_moist)
@@ -488,9 +488,9 @@ class ThermalGenerator:
                           & (self.pressure >= p_initial))
 
         if np.any(moist_levels):
-            t_final[moist_levels] = moist_lapse(
+            t_final[moist_levels] = moist_lapse_dj(
                 self.pressure[moist_levels], t_switch,
-                reference_pressure=p_switch, method='fast')
+                reference_pressure=p_switch)
             q_final[moist_levels] = saturation_specific_humidity(
                 self.pressure[moist_levels], t_final[moist_levels])
             l_final[moist_levels] = (
