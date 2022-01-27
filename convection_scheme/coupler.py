@@ -141,7 +141,7 @@ class CoupledThermalGenerator(ThermalGenerator):
 
     def multi(
             self, i_init_up, t_pert, q_pert, l_initial, w_initial,
-            rate, dnu_db, drag, l_crit, basic=True):
+            rate_up, rate_down, dnu_db, drag, l_crit, basic=True):
         """
         Simulate an updraft and three associated coupled downdrafts.
 
@@ -155,9 +155,10 @@ class CoupledThermalGenerator(ThermalGenerator):
             l_initial: Initial updraft liquid water content (mass of liquid
                 per unit total mass).
             w_initial: Initial updraft velocity (must be non-negative).
-            rate: Entrainment rate (should have dimensions
-                of 1/length). Assumed to be the same for updraft and
-                downdraft.
+            rate_up: Updraft entrainment rate (should have dimensions
+                of 1/length).
+            rate_down: Downdraft entrainment rate (should have dimensions
+                of 1/length).
             dnu_db: The proportionality constant defining the detrainent
                 rate nu. When the buoyancy b is negative, nu is zero,
                 and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
@@ -182,17 +183,17 @@ class CoupledThermalGenerator(ThermalGenerator):
         """
         updraft = self.updraft(
             i_init_up, t_pert, q_pert, l_initial, w_initial,
-            rate, dnu_db, drag, l_crit, basic=basic)
+            rate_up, dnu_db, drag, l_crit, basic=basic)
         downdraft1, downdraft2 = self.precipitation_driven(
-            updraft, rate, dnu_db, drag, basic=basic)
+            updraft, rate_down, dnu_db, drag, basic=basic)
         downdraft3 = self.overshooting(
-            updraft, rate, dnu_db, drag, basic=basic)
+            updraft, rate_down, dnu_db, drag, basic=basic)
 
         return updraft, downdraft1, downdraft2, downdraft3
 
     def ensemble(
             self, i_init_up, t_pert, q_pert, l_initial, w_initial,
-            rates, dnu_db, drag, l_crit, basic=True):
+            rates_up, rates_down, dnu_db, drag, l_crit, basic=True):
         """
         Simulate an ensemble of coupled updrafts and downdrafts.
 
@@ -209,10 +210,11 @@ class CoupledThermalGenerator(ThermalGenerator):
             l_initial: Initial updraft liquid water content (mass of liquid
                 per unit total mass).
             w_initial: Initial updraft velocity (must be non-negative).
-            rates: Array of entrainment rates (should have dimensions
-                of 1/length). The coupled downdrafts are assumed to
-                have the same entrainment rates as their associated
-                updrafts.
+            rates_up: Array of updraft entrainment rates (should have
+                dimensions of 1/length).
+            rates_down: Array of downdraft entrainment rates (should
+                have dimensions of 1/length). Must have the same size
+                as rates_up
             dnu_db: The proportionality constant defining the detrainent
                 rate nu. When the buoyancy b is negative, nu is zero,
                 and when b > 0, nu = b*dnu_db. The dimensions of dnu_db
@@ -233,16 +235,20 @@ class CoupledThermalGenerator(ThermalGenerator):
             instances. The contents of the arrays correspond to the
             four outputs of CoupledThermalGenerator.multi.
         """
-        rates = np.atleast_1d(rates)
-        updrafts = np.empty(rates.size, dtype='object')
-        downdrafts1 = np.empty(rates.size, dtype='object')
-        downdrafts2 = np.empty(rates.size, dtype='object')
-        downdrafts3 = np.empty(rates.size, dtype='object')
+        rates_up = np.atleast_1d(rates_up)
+        rates_down = np.atleast_1d(rates_down)
+        if rates_up.size != rates_down.size:
+            raise ValueError(
+                'rates_up must have the same size as rates_down.')
+        updrafts = np.empty(rates_up.size, dtype='object')
+        downdrafts1 = np.empty(rates_up.size, dtype='object')
+        downdrafts2 = np.empty(rates_up.size, dtype='object')
+        downdrafts3 = np.empty(rates_up.size, dtype='object')
 
-        for i in range(rates.size):
+        for i in range(rates_up.size):
             (updrafts[i], downdrafts1[i],
              downdrafts2[i], downdrafts3[i]) = self.multi(
                  i_init_up, t_pert, q_pert, l_initial, w_initial,
-                 rates[i], dnu_db, drag, l_crit, basic=basic)
+                 rates_up[i], rates_down[i] dnu_db, drag, l_crit, basic=basic)
 
         return updrafts, downdrafts1, downdrafts2, downdrafts3
