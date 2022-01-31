@@ -249,6 +249,6 @@ class CoupledThermalGenerator(ThermalGenerator):
             (updrafts[i], downdrafts1[i],
              downdrafts2[i], downdrafts3[i]) = self.multi(
                  i_init_up, t_pert, q_pert, l_initial, w_initial,
-                 rates_up[i], rates_down[i] dnu_db, drag, l_crit, basic=basic)
+                 rates_up[i], rates_down[i], dnu_db, drag, l_crit, basic=basic)
 
         return updrafts, downdrafts1, downdrafts2, downdrafts3
