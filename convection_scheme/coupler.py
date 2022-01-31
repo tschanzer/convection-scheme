@@ -1,5 +1,6 @@
 """Class to couple downdrafts to updrafts."""
 
+import sys
 import numpy as np
 from metpy.units import units
 
@@ -245,10 +246,14 @@ class CoupledThermalGenerator(ThermalGenerator):
         downdrafts2 = np.empty(rates_up.size, dtype='object')
         downdrafts3 = np.empty(rates_up.size, dtype='object')
 
+        n_done = 0
         for i in range(rates_up.size):
+            n_done += 1
+            sys.stdout.write(f'\rCalculation {n_done} of {rates_up.size}    ')
             (updrafts[i], downdrafts1[i],
              downdrafts2[i], downdrafts3[i]) = self.multi(
                  i_init_up, t_pert, q_pert, l_initial, w_initial,
                  rates_up[i], rates_down[i], dnu_db, drag, l_crit, basic=basic)
-
+        
+        sys.stdout.write('\n')
         return updrafts, downdrafts1, downdrafts2, downdrafts3
