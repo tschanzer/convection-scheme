@@ -115,6 +115,7 @@ class StochasticThermalGenerator:
         self.q_disp = q_disp
         self.l_disp = l_disp
         self.b_disp = b_disp
+        self.rng = np.random.default_rng(seed=0)
 
     def updraft(
             self, i_init, t_perturb, q_perturb, l_initial, w_initial,
@@ -498,24 +499,43 @@ class StochasticThermalGenerator:
             weighted by the mass mixing fraction of the components.
             Any levels below the initial level will be np.nan.
         """
-        rng = np.random.default_rng()
-        entrainment_occurs = np.full(self.height.size, False)
-        i_entrain = []
-        for i in range(i_init, 0, -1):
-            if len(i_entrain) == 0:
-                i_prev_entrain = i_init
-            else:
-                i_prev_entrain = i_entrain[-1]
-            delta_z = self.height[i] - self.height[i_prev_entrain]
-            p = 1 - np.exp(-delta_z/lambda_)
-            if rng.choice([True, False], p=[p, 1 - p]):
-                entrainment_occurs[i] = True
-                i_entrain.append(i)
+        # generate n exponentially distributed distances between
+        # successive entrainment events, where n is twice the expected
+        # number of entrainment events between the initial level and
+        # the top of the sounding
+        n_samples = 2*np.ceil((self.height[0] - self.height[i_init])/lambda_)
+        intervals = self.rng.exponential(
+            scale=lambda_.m_as(units.meter), size=int(n_samples))
+        
+        # take the column vector of distances between events,
+        # stack copies side by side to form a square matrix,
+        # set entries below the diagonal to zero then sum along the
+        # vertical axis to get a vector of distances between the initial
+        # level and each entrainment event. then add on the initial
+        # height to get the locations of the events.
+        intervals = np.tile(intervals, (intervals.size, 1)).T
+        z_entrain = (self.height[i_init]
+                     + np.sum(np.triu(intervals), axis=0)*units.meter)
+        
+        # exclude events above the top of the sounding
+        z_entrain = z_entrain[z_entrain < self.height[0]]
+        # for each event's location, find the index of the closest
+        # sounding level
+        i_entrain = np.argmin(np.abs(
+            np.atleast_2d(self.height).T - np.atleast_2d(z_entrain)
+        ), axis=0)
+        # exclude any repetitions (i.e., max one event per level)
+        i_entrain = np.flip(np.unique(i_entrain))
+        # get a boolean array, true if level i has an event, else false
+        entrainment_occurs = np.isin(np.arange(self.height.size), i_entrain)
 
-        m_entrain = rng.exponential(
+        # generate exponentially distributed mass fractions to be
+        # entrained at each event
+        m_entrain = self.rng.exponential(
             scale=sigma.m_as(units.dimensionless), size=len(i_entrain)
         )*units.dimensionless
 
+        # find the properties of the original component
         t_core, q_core, l_core = self._nonentraining_properties(
             self.pressure[i_init], t_initial, q_initial, l_initial, kind='up')
         r_core = mpcalc.mixing_ratio_from_specific_humidity(q_core)
@@ -539,40 +559,42 @@ class StochasticThermalGenerator:
         precip_disp = l_disp_excess[:,:-1] - l_disp_excess[:,1:]
         precip_disp = np.pad(precip_disp, ((0, 0), (0, 1)))
 
-        m_core = np.ones(self.height.size)*units.dimensionless
-        m_core[i_init+1:] = np.nan
-
-        t_all, q_all, l_all, b_all = [t_core], [q_core], [l_core], [b_core]
-        precip_all, m_all = [precip_core], [m_core]
+        # stack the row vectors containing the properties of each
+        # entrained component into matrices
+        t_all = np.vstack([self.t_disp[entrainment_occurs,:], t_core])
+        q_all = np.vstack([self.q_disp[entrainment_occurs,:], q_core])
+        l_all = np.vstack([l_disp[entrainment_occurs,:], l_core])
+        b_all = np.vstack([self.b_disp[entrainment_occurs,:], b_core])
+        precip_all = np.vstack(
+            [precip_disp[entrainment_occurs,:], precip_core])
+        
+        # m_all[i,j] will be the mass fraction of component number i
+        # at level j. initially only one component is present:
+        m_all = np.ones((1, self.height.size))*units.dimensionless
+        m_all[0,i_init+1:] = np.nan
+        
+        # at each event, we introduce a mass fraction m, and all the
+        # mass fractions present are scaled by a factor of 1/(1 + m).
         for i, m in zip(i_entrain, m_entrain):
-            t_all.append(self.t_disp[i,:])
-            q_all.append(self.q_disp[i,:])
-            l_all.append(l_disp[i,:])
-            b_all.append(self.b_disp[i,:])
-            precip_all.append(precip_disp[i,:])
             m_new = np.ones(self.height.size)*m
             m_new[i+1:] = 0
-            m_all.append(m_new)
-            for j in range(len(m_all)):
-                m_all[j][:i+1] = m_all[j][:i+1]/(1 + m)
-
-        m_all = concatenate([np.atleast_2d(m) for m in m_all])
-        t_final = np.sum(
-            concatenate([np.atleast_2d(t) for t in t_all])*m_all, axis=0)
-        q_final = np.sum(concatenate(
-            [np.atleast_2d(q) for q in q_all])*m_all, axis=0)
-        l_final = np.sum(concatenate(
-            [np.atleast_2d(l) for l in l_all])*m_all, axis=0)
-        b_final = np.sum(concatenate(
-            [np.atleast_2d(b) for b in b_all])*m_all, axis=0)
-        precip_final = np.sum(concatenate(
-            [np.atleast_2d(p) for p in precip_all])*m_all, axis=0)
+            m_all = np.insert(m_all, 0, m_new, axis=0)
+            m_all[:,:i+1] *= 1/(1 + m)
+        
+        # the final properties are the weighted average component
+        # properties weighted by mass fraction:
+        t_final = np.sum(t_all*m_all, axis=0)
+        q_final = np.sum(q_all*m_all, axis=0)
+        l_final = np.sum(l_all*m_all, axis=0)
+        b_final = np.sum(b_all*m_all, axis=0)
+        precip_final = np.sum(precip_all*m_all, axis=0)
 
         return (t_final, q_final, l_final,
                 b_final - l_final*const.g, precip_final)
 
     def _downdraft_properties(
-            self, i_init, t_initial, q_initial, l_initial, lambda_, sigma):
+            self, i_init, t_initial, q_initial,
+            l_initial, lambda_, sigma):
         """
         Find the properties of a heterogeneous downdraft parcel.
 
@@ -590,24 +612,43 @@ class StochasticThermalGenerator:
             of the parcel, weighted by the mass mixing fraction of the
             components. Any levels above the initial level will be np.nan.
         """
-        rng = np.random.default_rng()
-        entrainment_occurs = np.full(self.height.size, False)
-        i_entrain = []
-        for i in range(i_init, self.height.size - 1):
-            if len(i_entrain) == 0:
-                i_prev_entrain = i_init
-            else:
-                i_prev_entrain = i_entrain[-1]
-            delta_z = self.height[i_prev_entrain] - self.height[i]
-            p = 1 - np.exp(-delta_z/lambda_)
-            if rng.choice([True, False], p=[p, 1 - p]):
-                entrainment_occurs[i] = True
-                i_entrain.append(i)
+        # generate n exponentially distributed distances between
+        # successive entrainment events, where n is twice the expected
+        # number of entrainment events between the initial level and
+        # the bottom of the sounding
+        n_samples = 2*np.ceil((self.height[i_init] - self.height[-1])/lambda_)
+        intervals = self.rng.exponential(
+            scale=lambda_.m_as(units.meter), size=int(n_samples))
+        
+        # take the column vector of distances between events,
+        # stack copies side by side to form a square matrix,
+        # set entries below the diagonal to zero then sum along the
+        # vertical axis to get a vector of distances between the initial
+        # level and each entrainment event. then subtract these from
+        # the initial height to get the locations of the events.
+        intervals = np.tile(intervals, (intervals.size, 1)).T
+        z_entrain = (self.height[i_init]
+                     - np.sum(np.triu(intervals), axis=0)*units.meter)
+        
+        # exclude events below the bottom of the sounding
+        z_entrain = z_entrain[z_entrain > self.height[-1]]
+        # for each event's location, find the index of the closest
+        # sounding level
+        i_entrain = np.argmin(np.abs(
+            np.atleast_2d(self.height).T - np.atleast_2d(z_entrain)
+        ), axis=0)
+        # exclude any repetitions (i.e., max one event per level)
+        i_entrain = np.unique(i_entrain)
+        # get a boolean array, true if level i has an event, else false
+        entrainment_occurs = np.isin(np.arange(self.height.size), i_entrain)
 
-        m_entrain = rng.exponential(
+        # generate exponentially distributed mass fractions to be
+        # entrained at each event
+        m_entrain = self.rng.exponential(
             scale=sigma.m_as(units.dimensionless), size=len(i_entrain)
         )*units.dimensionless
 
+        # find the properties of the original component
         t_core, q_core, l_core = self._nonentraining_properties(
             self.pressure[i_init], t_initial,
             q_initial, l_initial, kind='down')
@@ -615,31 +656,32 @@ class StochasticThermalGenerator:
         tv_core = mpcalc.virtual_temperature(t_core, r_core)
         b_core = (tv_core - self.t_virtual)/self.t_virtual*const.g
 
-        m_core = np.ones(self.height.size)*units.dimensionless
-        m_core[0:i_init] = np.nan
-
-        t_all, q_all, l_all, b_all = [t_core], [q_core], [l_core], [b_core]
-        m_all = [m_core]
+        # stack the row vectors containing the properties of each
+        # entrained component into matrices
+        t_all = np.vstack([t_core, self.t_disp[entrainment_occurs,:]])
+        q_all = np.vstack([q_core, self.q_disp[entrainment_occurs,:]])
+        l_all = np.vstack([l_core, self.l_disp[entrainment_occurs,:]])
+        b_all = np.vstack([b_core, self.b_disp[entrainment_occurs,:]])
+        
+        # m_all[i,j] will be the mass fraction of component number i
+        # at level j. initially only one component is present:
+        m_all = np.ones((1, self.height.size))*units.dimensionless
+        m_all[0,:i_init] = np.nan
+        
+        # at each event, we introduce a mass fraction m, and all the
+        # mass fractions present are scaled by a factor of 1/(1 + m).
         for i, m in zip(i_entrain, m_entrain):
-            t_all.append(self.t_disp[i,:])
-            q_all.append(self.q_disp[i,:])
-            l_all.append(self.l_disp[i,:])
-            b_all.append(self.b_disp[i,:])
             m_new = np.ones(self.height.size)*m
-            m_new[0:i] = 0
-            m_all.append(m_new)
-            for j in range(len(m_all)):
-                m_all[j][i:] = m_all[j][i:]/(1 + m)
-
-        m_all = concatenate([np.atleast_2d(m) for m in m_all])
-        t_final = np.sum(
-            concatenate([np.atleast_2d(t) for t in t_all])*m_all, axis=0)
-        q_final = np.sum(concatenate(
-            [np.atleast_2d(q) for q in q_all])*m_all, axis=0)
-        l_final = np.sum(concatenate(
-            [np.atleast_2d(l) for l in l_all])*m_all, axis=0)
-        b_final = np.sum(concatenate(
-            [np.atleast_2d(b) for b in b_all])*m_all, axis=0)
+            m_new[:i] = 0
+            m_all = np.insert(m_all, m_all.shape[0], m_new, axis=0)
+            m_all[:,i:] *= 1/(1 + m)
+        
+        # the final properties are the weighted average component
+        # properties weighted by mass fraction:
+        t_final = np.sum(t_all*m_all, axis=0)
+        q_final = np.sum(q_all*m_all, axis=0)
+        l_final = np.sum(l_all*m_all, axis=0)
+        b_final = np.sum(b_all*m_all, axis=0)
 
         return t_final, q_final, l_final, b_final - l_final*const.g
 
