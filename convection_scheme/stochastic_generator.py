@@ -506,7 +506,7 @@ class StochasticThermalGenerator:
         n_samples = 2*np.ceil((self.height[0] - self.height[i_init])/lambda_)
         intervals = self.rng.exponential(
             scale=lambda_.m_as(units.meter), size=int(n_samples))
-        
+
         # take the column vector of distances between events,
         # stack copies side by side to form a square matrix,
         # set entries below the diagonal to zero then sum along the
@@ -516,7 +516,7 @@ class StochasticThermalGenerator:
         intervals = np.tile(intervals, (intervals.size, 1)).T
         z_entrain = (self.height[i_init]
                      + np.sum(np.triu(intervals), axis=0)*units.meter)
-        
+
         # exclude events above the top of the sounding
         z_entrain = z_entrain[z_entrain < self.height[0]]
         # for each event's location, find the index of the closest
@@ -567,12 +567,12 @@ class StochasticThermalGenerator:
         b_all = np.vstack([self.b_disp[entrainment_occurs,:], b_core])
         precip_all = np.vstack(
             [precip_disp[entrainment_occurs,:], precip_core])
-        
+
         # m_all[i,j] will be the mass fraction of component number i
         # at level j. initially only one component is present:
         m_all = np.ones((1, self.height.size))*units.dimensionless
         m_all[0,i_init+1:] = np.nan
-        
+
         # at each event, we introduce a mass fraction m, and all the
         # mass fractions present are scaled by a factor of 1/(1 + m).
         for i, m in zip(i_entrain, m_entrain):
@@ -580,7 +580,7 @@ class StochasticThermalGenerator:
             m_new[i+1:] = 0
             m_all = np.insert(m_all, 0, m_new, axis=0)
             m_all[:,:i+1] *= 1/(1 + m)
-        
+
         # the final properties are the weighted average component
         # properties weighted by mass fraction:
         t_final = np.sum(t_all*m_all, axis=0)
@@ -619,7 +619,7 @@ class StochasticThermalGenerator:
         n_samples = 2*np.ceil((self.height[i_init] - self.height[-1])/lambda_)
         intervals = self.rng.exponential(
             scale=lambda_.m_as(units.meter), size=int(n_samples))
-        
+
         # take the column vector of distances between events,
         # stack copies side by side to form a square matrix,
         # set entries below the diagonal to zero then sum along the
@@ -629,7 +629,7 @@ class StochasticThermalGenerator:
         intervals = np.tile(intervals, (intervals.size, 1)).T
         z_entrain = (self.height[i_init]
                      - np.sum(np.triu(intervals), axis=0)*units.meter)
-        
+
         # exclude events below the bottom of the sounding
         z_entrain = z_entrain[z_entrain > self.height[-1]]
         # for each event's location, find the index of the closest
@@ -662,12 +662,12 @@ class StochasticThermalGenerator:
         q_all = np.vstack([q_core, self.q_disp[entrainment_occurs,:]])
         l_all = np.vstack([l_core, self.l_disp[entrainment_occurs,:]])
         b_all = np.vstack([b_core, self.b_disp[entrainment_occurs,:]])
-        
+
         # m_all[i,j] will be the mass fraction of component number i
         # at level j. initially only one component is present:
         m_all = np.ones((1, self.height.size))*units.dimensionless
         m_all[0,:i_init] = np.nan
-        
+
         # at each event, we introduce a mass fraction m, and all the
         # mass fractions present are scaled by a factor of 1/(1 + m).
         for i, m in zip(i_entrain, m_entrain):
@@ -675,7 +675,7 @@ class StochasticThermalGenerator:
             m_new[:i] = 0
             m_all = np.insert(m_all, m_all.shape[0], m_new, axis=0)
             m_all[:,i:] *= 1/(1 + m)
-        
+
         # the final properties are the weighted average component
         # properties weighted by mass fraction:
         t_final = np.sum(t_all*m_all, axis=0)

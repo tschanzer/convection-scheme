@@ -15,7 +15,7 @@ PRECIP_LAYER_THICKNESS = 2000*units.meter
 class StochasticCoupledThermalGenerator(StochasticThermalGenerator):
     """
     Calculates stochastic coupled updrafts and downdrafts.
-    
+
     The stochastic model follows Romps and Kuang (2010).
 
     Inherits the methods and attributes of StochasticThermalGenerator,
@@ -31,7 +31,7 @@ class StochasticCoupledThermalGenerator(StochasticThermalGenerator):
     Attributes:
         i_min_theta_e: Index of the level of minimum theta-e in the
             sounding.
-            
+
     References:
         Romps, D. M., & Kuang, Z. (2010). Nature versus nurture in
         shallow convection. Journal of the Atmospheric Sciences, 67(5),
@@ -233,6 +233,6 @@ class StochasticCoupledThermalGenerator(StochasticThermalGenerator):
              downdrafts2[i], downdrafts3[i]) = self.multi(
                  i_init_up, t_pert, q_pert, l_initial, w_initial,
                  lambda_, sigma, drag, l_crit, basic=basic)
-        
+
         sys.stdout.write('\n')
         return updrafts, downdrafts1, downdrafts2, downdrafts3
