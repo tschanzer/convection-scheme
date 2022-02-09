@@ -1,4 +1,4 @@
-height (km), pressure, (mbar), temperature (K), density (g/m^3), water vapor (g/m^3)
+height (km), pressure (mbar), temperature (K), density (g/m^3), water vapor (g/m^3)
 0, 1013, 300, 1167, 19
 1, 904, 294, 1064, 13
 2, 805, 288, 968.9, 9.3
