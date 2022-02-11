@@ -78,6 +78,20 @@ downdrafts. Warming the sounding in this way seems to have no effect
 on the existing relationship between downdraft strength and initiation
 level.
 
+For more detail, refer to the following notebooks in order:
+1. [`coupling_exploratory.ipynb`](https://github.com/tschanzer/convection-scheme/blob/main/notebooks/coupling_notebooks/coupling_exploratory.ipynb)
+    presents a review of the literature relevant to updraft-downdraft
+    coupling and tests the coupling method used in our model,
+2. [`generalising_coupling.ipynb`](https://github.com/tschanzer/convection-scheme/blob/main/notebooks/coupling_notebooks/generalising_coupling_results.ipynb)
+    determines whether the results of the first notebook generalise to
+    other real soundings,
+3. [`warmer_smoothed_soundings.ipynb`](https://github.com/tschanzer/convection-scheme/blob/main/notebooks/coupling_notebooks/warmer_smoothed_soundings.ipynb)
+    performs the same calculations as the second notebook, but on warmer
+    or smoothed versions of the soundings,
+4. [`standard_soundings.ipynb`](https://github.com/tschanzer/convection-scheme/blob/main/notebooks/coupling_notebooks/standard_soundings.ipynb)
+    performs the same calculations again, now on a standard reference
+    sounding from the literature.
+
 ## References
 Romps, D. M., & Kuang, Z. (2010). Nature versus nurture in shallow
 convection. *Journal of the Atmospheric Sciences*, **67**(5), 1655–1666.
