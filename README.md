@@ -7,6 +7,10 @@ development of the model, it is possible that, with further
 improvements, it could be used in a convection parametrisation in
 a climate model.
 
+The work was done at the UNSW Climate Change Research Centre from
+December 2021 to February 2022 under the supervision of Prof. Steven
+Sherwood.
+
 ## Methods
 
 The model is an implementation of the heterogeneous parcel model
